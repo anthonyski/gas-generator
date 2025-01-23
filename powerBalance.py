@@ -6,31 +6,22 @@ import sympy as sp
 
 from utils import *
 
-loadingCoeff = -2.0
-N_rpm = 25000
-pressureRise = 300 #psi
-MR_gasgen = .3
-T_o1 = 1100 #K, from CEA
-MR_chamber = 2
-Base_ox_mdot = 3.2
-Base_fuel_mdot = 1.6
-eta_pump_ox = .6 #need to add to optimizer
-eta_pump_fuel = .6 #need to add to optimizer
-eta_turbine = .85 #need to add to optimizer
-gamma = 1.1253
-MW = 11.498
-C_p = 10.7089
+
+
 
 
 def solveTurbine(turbine):
+    gamma = 1.1253
+    MW = 11.498
+    C_p = 3893    
     c_z = turbine.flowCoeff*turbine.U ##assume change in c_z is low across stator (since change in density is low 1-2%)
-    rho_o1 = solve_ideal_gas_density(turbine.p_o1, T_o1, turbine.R)
+    rho_o1 = solve_ideal_gas_density(turbine.p_o1, turbine.T_o1, turbine.R)
     rho_1 = solve_static_rho(gamma, turbine.M_in, rho_o1)
     A_zN = solve_area(turbine.mDot, c_z, rho_1)
     r_h = solve_rhub(turbine.r_m, A_zN)
     r_tip = solve_rtip(turbine.r_m, r_h)
     h_N = r_tip-r_h
-    T_2 = float(T_o1*(1+(gamma-1)/2*turbine.M_2**2)**-1)
+    T_2 = float(turbine.T_o1*(1+(gamma-1)/2*turbine.M_2**2)**-1)
     
     alpha_2 = 72 ##general upper bound for alpha2
     c_theta_2 = c_z*tand(alpha_2)
@@ -56,16 +47,16 @@ def solveTurbine(turbine):
     exponent = gamma/(gamma-1)
     c_2 = np.sqrt(c_z**2+c_theta_2**2)
     debug_p_o1 = turbine.p_o1
-    p_o2 = -(1-((1-c_2**2/2/C_p/T_o1/(1-zeta_N))/(1-c_2**2/2/C_p/T_o1))**exponent)*turbine.p_o1+turbine.p_o1
+    p_o2 = -(1-((1-c_2**2/2/C_p/turbine.T_o1/(1-zeta_N))/(1-c_2**2/2/C_p/turbine.T_o1))**exponent)*turbine.p_o1+turbine.p_o1
     pressure_loss_ratio_nozzle = p_o2/turbine.p_o1
-    print(turbine.U)
-    T_o3 = abs(np.divide(loadingCoeff*turbine.U**2,C_p)+T_o1)
-    rho_2o_real = solve_ideal_gas_density(p_o2, T_o1, turbine.R)
+    print("The blade height is: " + str(h_N)) 
+    T_o3 = abs(np.divide(turbine.loadingCoeff*turbine.U**2,C_p)+turbine.T_o1)
+    rho_2o_real = solve_ideal_gas_density(p_o2, turbine.T_o1, turbine.R)
     rho_2_real = solve_static_rho(gamma, turbine.M_2, rho_2o_real)
     A_zR = solve_area(turbine.mDot,c_z,rho_2_real)
     beta_2 = np.atan((c_z*tand(alpha_2)-turbine.U)/c_z)*180/np.pi 
     beta_3 = -beta_2 ## full impulse turbine
-    alpha_3 = np.atan((2+loadingCoeff)/2/turbine.flowCoeff)*180/np.pi
+    alpha_3 = np.atan((2+turbine.loadingCoeff)/2/turbine.flowCoeff)*180/np.pi
     w_theta_2 = c_z*tand(beta_2)
     w_theta_3 = c_z*tand(beta_3)
     T_3 = T_o3-c_z**2/2/C_p/cosd(alpha_3)
@@ -94,24 +85,25 @@ def solveTurbine(turbine):
     p_o2_rel = p_2*(1+(gamma-1)/2*M_2rel**2)**exponent
     p_o3_rel = np.multiply(-(1-((1-w_3**2/2/C_p/T_o2_rel*(1/(1-zeta_R)))/(1-(w_3**2)/2/C_p/T_o2_rel))**exponent), p_o2_rel)+p_o2_rel
     p_3 = p_o3_rel*(1+(gamma-1)/2*M_3rel**2)**(-exponent)
-    p_o3 = p_2*(1+(gamma-1)/2*M_3**2)**exponent
-    print("The stator has:")
+    p_o3 = p_3*(1+(gamma-1)/2*M_3**2)**exponent
+
+
+    
     numStatorBlades = 2*np.pi*turbine.r_m/s_N
-    print(numStatorBlades)
-    print("The rotor has")
+    print("The stator has: " + str(numStatorBlades) + " blades")
+   
+   
     numRotorBlades = 2*np.pi*turbine.r_m/s_R
-    print(numRotorBlades)
+    print("The rotor has: " + str(numRotorBlades) + " blades")
+  
+
+    return (1-T_o3/turbine.T_o1)/(1-p_o3/turbine.p_o1)
 
 
-
-
-    return (1-T_o3/T_o1)/(1-p_o3/turbine.p_o1)
-def balance_optimizer(x):
-
-    loadingCoeff =x[0]
-    N_rpm = x[1]
-    U = x[2]
-    C_p = x[3]
+def balance_optimizer(system):
+    gamma = 1.1253
+    MW = 11.498
+    C_p = 3893
     
     ##constants
 
@@ -119,13 +111,11 @@ def balance_optimizer(x):
     MR_gasgen = .3
     T_o1 = 1100
     MR_chamber = 2
-    Base_ox_mdot = 3.2
-    Base_fuel_mdot = 1.6
-    eta_pump_ox = .6
-    eta_pump_fuel = .75
-    eta_turbine = .85
+
     gasGenAverageRho = (800+1100*MR_gasgen)/(1+MR_gasgen)
- 
+    
+    rotor_Re = 1e5
+    stator_Re = 1e5
     rhoOx = 1100
     rhoFuel = 800
 
@@ -138,16 +128,16 @@ def balance_optimizer(x):
     
     
     def balance(g):
-        return Base_ox_mdot/rhoOx*pressureRise/eta_pump_ox+Base_fuel_mdot/rhoFuel*pressureRise/eta_pump_fuel+g/gasGenAverageRho/eta_pump_fuel*pressureRise+U**2*g*loadingCoeff
+        return system.base_ox_mdot/rhoOx*pressureRise/system.eta_pump_ox+system.base_fuel_mdot/rhoFuel*pressureRise/system.eta_pump_fuel+g/gasGenAverageRho/system.eta_pump_fuel*pressureRise+system.U**2*g*system.loadingCoeff
     
         
     mDot_gasgen = scipy.optimize.newton(balance, .1)
-    pumpPower = Base_ox_mdot/rhoOx*pressureRise/eta_pump_ox+Base_fuel_mdot/rhoFuel*pressureRise/eta_pump_fuel+mDot_gasgen/gasGenAverageRho/eta_pump_fuel
-    r_m = U*30/np.pi/N_rpm ##answer in meters
-    print(r_m*39.37)
-    turbine = turbineParameters(mDot_gasgen, T_o1, pressureRise*0.8, gamma, loadingCoeff, r_m, U, N_rpm, 8314.5/11.498, 1.4, .3, 1, 7e5, 7e5, pumpPower*1.05)
+    pumpPower = system.base_ox_mdot/rhoOx*pressureRise/system.eta_pump_ox+system.base_fuel_mdot/rhoFuel*pressureRise/system.eta_pump_fuel+mDot_gasgen/gasGenAverageRho/system.eta_pump_fuel
+    r_m = system.U*30/np.pi/system.N_rpm ##answer in meters
+    print("The turbine mean radius is: "+ str(r_m*39.37))
+    turbine = turbineParameters(mDot_gasgen, T_o1, pressureRise*0.8, gamma, system.loadingCoeff, r_m, system.U, system.N_rpm, 8314.5/MW, system.flowCoeff, .3, 1, stator_Re, rotor_Re, pumpPower*1.05)
     efficiency = solveTurbine(turbine)
-    print(efficiency)
+    print("The turbine efficiency is: " + str(efficiency))
 
     return mDot_gasgen
 
@@ -170,10 +160,9 @@ class turbineParameters:
         self.Re_t_R = float(Re_t_R)
         self.Power = float(Power)
 
-x = [loadingCoeff, N_rpm, 150, C_p]
-mdots = balance_optimizer(x)
 
-print(mdots)
+
+
 
 
 
